@@ -1,9 +1,10 @@
 import { Bed, scatterStones } from "./bed";
+import { School, type FishSpec, type Splash } from "./fish";
 import { Floating } from "./floating";
 import { enableFloatTargets, parseColor } from "./gl";
 import { Grass, growGrass } from "./grass";
 import { Underwater } from "./underwater";
-import { Renderer, type Palette } from "./renderer";
+import { Renderer, SUN, type Palette } from "./renderer";
 import { Ripples } from "./ripples";
 
 export interface PondPalette {
@@ -44,6 +45,11 @@ export interface PondOptions {
   lilies?: number;
   /** How many water lilies bloom on the pads. Default 3. */
   flowers?: number;
+  /**
+   * The koi: how many (in a mix of varieties), or a list describing each.
+   * Up to 16. Default 6.
+   */
+  fish?: number | FishSpec[];
   /** Picks the layout of stones and pebbles; the same seed always gives the same pond. Default 1. */
   seed?: number;
   palette?: Partial<PondPalette>;
@@ -98,6 +104,22 @@ function maxDragSteps(liveRipples: number) {
 /** Ignore jitter smaller than this, metres. */
 const DRAG_DEADZONE = 0.002;
 
+/** A mix of varieties for a number of fish, or the list as given. */
+function fishSpecs(fish: number | FishSpec[], seed: number): FishSpec[] {
+  if (Array.isArray(fish)) return fish;
+  const mix = ["kohaku", "sanke", "ogon", "karasu", "tancho", "showa", "platinum"] as const;
+  const start = Math.abs(Math.floor(seed)) % mix.length;
+  return Array.from({ length: fish }, (_, i) => ({ variety: mix[(start + i) % mix.length] }));
+}
+
+/** The direction toward the sun as seen from under water (refracted at the surface). */
+function refractedSun(): [number, number, number] {
+  // Snell: the horizontal part shrinks by 1/1.333; the ray stays unit length.
+  const eta = 1 / 1.333;
+  const [x, y, z] = SUN;
+  return [eta * x, eta * y, Math.sqrt(1 - eta * eta * (1 - z * z))];
+}
+
 /** Hex colours are sRGB; lighting maths needs linear values. */
 function linear(hex: string) {
   return parseColor(hex).map((c) => c ** 2.2) as [number, number, number];
@@ -120,6 +142,7 @@ export function createPond(canvas: HTMLCanvasElement, options: PondOptions = {})
     grass = 5,
     lilies = 9,
     flowers = 3,
+    fish = 6,
     seed = 1,
   } = options;
   const quality =
@@ -155,6 +178,10 @@ export function createPond(canvas: HTMLCanvasElement, options: PondOptions = {})
   // The direction the pond's slow current flows, which the grass leans with.
   const current = seed * 2.399963;
   const ripples = new Ripples(gl);
+  const school = new School(gl);
+  let released = false;
+  // The fish see the sun through the surface, bent toward straight down.
+  const toSunUnderwater = refractedSun();
   let cssWidth = 0;
   let cssHeight = 0;
   /** Metres per world unit (one canvas height). */
@@ -181,10 +208,16 @@ export function createPond(canvas: HTMLCanvasElement, options: PondOptions = {})
       palette.bed,
       scatterStones(stones, seed, aspect, metres),
     );
-    const layerScale = quality.caustics / Math.max(cssWidth, cssHeight);
-    underwater.resize(Math.round(cssWidth * layerScale), Math.round(cssHeight * layerScale));
+    // Fish and grass are drawn at the screen's own resolution, so they stay sharp.
+    underwater.resize(canvas.width, canvas.height);
     plants.set(growGrass(grass, seed, aspect, metres, current));
     floating.place({ lilies, flowers }, seed, aspect, metres);
+    // Fish are released once; later resizes keep them where they are.
+    if (released) school.resize(aspect, metres);
+    else {
+      school.populate(fishSpecs(fish, seed), seed, aspect, metres);
+      released = true;
+    }
   }
 
   /** CSS pixels from the top-left to world units (y up, canvas height = 1). */
@@ -193,6 +226,12 @@ export function createPond(canvas: HTMLCanvasElement, options: PondOptions = {})
   }
 
   let time = 0;
+
+  // Ripples the fish make, born now.
+  const splash: Splash = {
+    tap: (x, y, d) => ripples.tap(x, y, time, d),
+    move: (x, y, d, dx, dy) => ripples.move(x, y, time, d, dx, dy),
+  };
 
   function ripple(x: number, y: number, { strength = 1 }: RippleOptions = {}) {
     const p = toWorld(x, y);
@@ -261,10 +300,12 @@ export function createPond(canvas: HTMLCanvasElement, options: PondOptions = {})
       : null;
     fingerLast = dragTo;
     floating.step(dt, finger);
+    school.step(dt, finger, splash);
     if (dragging) emitDrag();
     ripples.build(vao);
     underwater.begin();
     plants.draw(time, cssWidth / cssHeight, depth, bed.texture);
+    school.draw(toSunUnderwater);
     underwater.end();
     renderer.draw(ripples, bed.texture, layer, floating, vao, time, { palette, depth, waves, metres });
   }
@@ -291,6 +332,7 @@ export function createPond(canvas: HTMLCanvasElement, options: PondOptions = {})
     const p = local(e);
     ripples.tap(p.x, p.y, time, TAP_DEPTH);
     floating.tap(p.x, p.y);
+    school.startle(p.x, p.y);
     dragging = true;
     dragFrom = { ...p, time };
     dragTo = p;
@@ -337,6 +379,7 @@ export function createPond(canvas: HTMLCanvasElement, options: PondOptions = {})
       ripples.dispose();
       bed.dispose();
       plants.dispose();
+      school.dispose();
       floating.dispose();
       underwater.dispose();
       renderer.dispose();

@@ -288,7 +288,7 @@ export interface RenderSettings {
 }
 
 /** Sunlight comes from up and to the left, so caustics lean a little. */
-const SUN: [number, number, number] = (() => {
+export const SUN: [number, number, number] = (() => {
   const v = [-0.22, 0.3, 1];
   const l = Math.hypot(...v);
   return v.map((c) => c / l) as [number, number, number];

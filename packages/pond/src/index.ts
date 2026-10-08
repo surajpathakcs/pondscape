@@ -7,3 +7,4 @@ export {
   type PondPalette,
   type RippleOptions,
 } from "./pond";
+export { koiVarieties, type FishSpec, type KoiVariety } from "./fish";
