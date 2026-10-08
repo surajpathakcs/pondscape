@@ -168,14 +168,14 @@ export class Grass {
   }
 
   /** Draws into the underwater layer, which must be bound (see Underwater.begin). */
-  draw(time: number, aspect: number, depth: number, bedMap: WebGLTexture) {
+  draw(time: number, aspect: number, depth: number, floorMap: WebGLTexture) {
     const { gl } = this;
     if (this.count === 0) return;
     const { program, uniforms } = this.program;
     gl.useProgram(program);
     gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, bedMap);
-    gl.uniform1i(uniforms.u_bedMap, 0);
+    gl.bindTexture(gl.TEXTURE_2D, floorMap);
+    gl.uniform1i(uniforms.u_floor, 0);
     gl.uniform1f(uniforms.u_time, time);
     gl.uniform1f(uniforms.u_current, this.current);
     gl.uniform1f(uniforms.u_aspect, aspect);

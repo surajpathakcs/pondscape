@@ -35,21 +35,28 @@ float fbm(vec2 p) {
 }
 `;
 
-export const BED = /* glsl */ `
-uniform float u_depth;
-uniform float u_aspect;
-uniform sampler2D u_bedMap; // rgb = colour, a = height above the base depth
-
+/** Needs NOISE, and uniforms u_depth and u_aspect. */
+export const BED_DEPTH = /* glsl */ `
 // Depth of the bed below the surface: uneven, and shallower toward the banks.
 float bedDepth(vec2 p) {
   vec2 edge = min(p, vec2(u_aspect, 1.0) - p);
   float bank = smoothstep(-0.05, 0.25, min(edge.x, edge.y));
   return u_depth * (0.85 + 0.35 * (fbm(p * 1.7) - 0.5)) * mix(0.55, 1.0, bank);
 }
+`;
 
-// Depth of whatever is down there first: silt, a pebble or a stone's top.
+/**
+ * The floor as the other passes see it. Its depth never changes, so it's
+ * worked out once into a texture (see bed.ts) rather than every frame.
+ */
+export const BED = /* glsl */ `
+uniform float u_depth;
+uniform float u_aspect;
+uniform sampler2D u_bedMap; // rgb = colour, a = height above the base depth
+uniform sampler2D u_floor;  // r = depth of whatever is down there first (silt, a pebble or a stone's top); gb = how it rises
+
 float floorDepth(vec2 p) {
-  return bedDepth(p) - texture(u_bedMap, p / vec2(u_aspect, 1.0)).a;
+  return texture(u_floor, p / vec2(u_aspect, 1.0)).r;
 }
 
 // Where a ray entering the water at \`world\` heading along \`ray\` meets the

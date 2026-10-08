@@ -220,11 +220,12 @@ export function createPond(canvas: HTMLCanvasElement, options: PondOptions = {})
       vao,
       palette.bed,
       scatterStones(stones, seed, aspect, metres),
+      depth,
     );
     // Fish and grass are drawn at the screen's own resolution, so they stay sharp.
     underwater.resize(canvas.width, canvas.height);
     plants.set(growGrass(grass, seed, aspect, metres, current));
-    floating.place({ lilies, flowers }, seed, aspect, metres);
+    floating.place({ lilies, flowers }, seed, aspect, metres, canvas.height);
     // Fish are released once; later resizes keep them where they are.
     if (released) {
       school.resize(aspect, metres);
@@ -300,7 +301,9 @@ export function createPond(canvas: HTMLCanvasElement, options: PondOptions = {})
       fpsSince = now;
     }
     const layer = underwater.layer;
-    if (cssWidth === 0 || !bed.texture || !layer) return;
+    const bedMap = bed.texture;
+    const floorMap = bed.floor;
+    if (cssWidth === 0 || !bedMap || !floorMap || !layer) return;
 
     time += dt;
     // A finger in the water shoves floating things; its speed comes from
@@ -321,12 +324,12 @@ export function createPond(canvas: HTMLCanvasElement, options: PondOptions = {})
     if (dragging) emitDrag();
     ripples.build(vao);
     underwater.begin();
-    plants.draw(time, cssWidth / cssHeight, depth, bed.texture);
+    plants.draw(time, cssWidth / cssHeight, depth, floorMap);
     // Axolotls keep to the floor, below the fish.
     salamanders.draw(toSunUnderwater);
     school.draw(toSunUnderwater);
     underwater.end();
-    renderer.draw(ripples, bed.texture, layer, floating, vao, time, { palette, depth, waves, metres });
+    renderer.draw(ripples, bedMap, floorMap, layer, floating, vao, time, { palette, depth, waves, metres });
   }
 
   function resume() {

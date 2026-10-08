@@ -1,6 +1,6 @@
 import { random } from "./bed";
 import { Lilies } from "./lily";
-import { createProgram, type Program } from "./gl";
+import { createProgram, FULLSCREEN_VERT, type Program } from "./gl";
 import { NOISE } from "./shaders/common";
 
 /*
@@ -71,34 +71,82 @@ vec3 lightInAir(vec3 albedo, vec3 normal, float sheen, float sharpness) {
 }
 `;
 
-const PAD_FRAG = /* glsl */ `#version 300 es
+/*
+ * A pad's colour, rim and slit never change, so each pad is drawn once into
+ * an atlas at its on-screen size (PAD_BAKE_FRAG); every frame just reads it
+ * and adds what does change: the tilt of the water and the light (PAD_FRAG).
+ */
+const PAD_BAKE_FRAG = /* glsl */ `#version 300 es
 precision highp float;
-in vec2 v_local;
-in vec2 v_slope;
-in vec4 v_look; // seed; slit angle; how weathered 0..1; -
-in float v_angle;
-layout(location = 0) out vec4 o_colour;
+in vec2 v_uv;
+layout(location = 0) out vec4 o_colour; // colour; coverage
+layout(location = 1) out vec4 o_shape;  // rim curl; weathering
+
+uniform vec4 u_look; // seed; slit angle; how weathered 0..1; -
 
 ${NOISE}
-${AIR_LIGHT}
 
 void main() {
-  float r = length(v_local);
-  float a = atan(v_local.y, v_local.x);
-  float seed = v_look.x;
+  vec2 local = v_uv * 2.0 - 1.0;
+  float r = length(local);
+  float a = atan(local.y, local.x);
+  float seed = u_look.x;
   float soft = fwidth(r) * 1.5;
 
   // A gently wavy, slightly ragged rim.
   float rim = 0.96 + 0.02 * sin(a * 6.0 + seed * 40.0) + 0.03 * (noise(vec2(a * 3.0, seed * 17.0)) - 0.5);
   float alpha = 1.0 - smoothstep(rim - soft, rim, r);
   // The slit: a narrow wedge running from the rim into the centre.
-  float off = abs(atan(sin(a - v_look.y), cos(a - v_look.y))) * r;
+  float off = abs(atan(sin(a - u_look.y), cos(a - u_look.y))) * r;
   float slit = 0.035 * smoothstep(0.0, 1.0, r);
   alpha *= smoothstep(slit, slit + soft, off);
-  if (alpha < 0.003) discard;
 
-  // Flat, with the rim curling up a little; the curl tilts the edge inward.
+  // Flat, with the rim curling up a little.
   float curl = smoothstep(0.78, 1.0, r / rim);
+
+  // Faint, irregular radial veins, fading toward the rim and the centre.
+  float vein = smoothstep(0.93, 1.0, abs(cos(a * 11.0 + 2.2 * noise(vec2(r * 3.0, seed * 9.0)))));
+  vein *= smoothstep(0.1, 0.35, r) * (1.0 - smoothstep(0.6, 0.9, r)) * (0.5 + 0.5 * noise(vec2(a * 5.0, seed)));
+
+  vec3 green = mix(vec3(0.016, 0.05, 0.01), vec3(0.035, 0.08, 0.014), fbm(local * 2.0 + seed * 11.0));
+  vec3 colour = green * (1.0 + 0.18 * vein);
+  // Weathering: yellow-brown patches, and a reddish rim on older pads.
+  float aged = smoothstep(0.62, 0.8, fbm(local * 2.6 + seed * 23.0)) * u_look.z;
+  colour = mix(colour, vec3(0.16, 0.11, 0.025), aged);
+  colour = mix(colour, vec3(0.09, 0.035, 0.02), smoothstep(0.86, 1.0, r / rim) * (0.3 + 0.5 * u_look.z));
+
+  // Colour is written everywhere, even outside the pad, so filtering at
+  // its edge never blends in a dark fringe.
+  o_colour = vec4(colour, alpha);
+  o_shape = vec4(curl, aged, 0.0, 1.0);
+}
+`;
+
+const PAD_FRAG = /* glsl */ `#version 300 es
+precision highp float;
+in vec2 v_local;
+in vec2 v_slope;
+in vec4 v_look; // seed; slit angle; how weathered 0..1; atlas cell
+in float v_angle;
+layout(location = 0) out vec4 o_colour;
+
+uniform sampler2D u_padColour;
+uniform sampler2D u_padShape;
+uniform int u_atlasColumns;
+
+${AIR_LIGHT}
+
+void main() {
+  // Integer maths: float mod() can land on the wrong cell when it rounds.
+  int index = int(v_look.w + 0.5);
+  vec2 cell = vec2(index % u_atlasColumns, index / u_atlasColumns);
+  vec2 uv = (cell + v_local * 0.5 + 0.5) / float(u_atlasColumns);
+  vec4 baked = texture(u_padColour, uv);
+  if (baked.a < 0.003) discard;
+  vec2 shape = texture(u_padShape, uv).rg;
+
+  float r = length(v_local);
+  float seed = v_look.x;
   vec2 radial = toWorld(v_local / max(r, 1e-4), v_angle);
   // Real pads gently undulate, so glare off the wax breaks into patches
   // instead of the whole pad flashing at once.
@@ -106,21 +154,11 @@ void main() {
     sin(v_local.x * 4.7 + seed * 7.0 + 1.3 * cos(v_local.y * 3.9)),
     cos(v_local.y * 5.3 + seed * 3.0 + 1.3 * sin(v_local.x * 4.1))
   );
-  vec3 normal = normalize(vec3(-v_slope - radial * curl * 0.3 + toWorld(undulate, v_angle), 1.0));
+  // The curled rim tilts the edge inward.
+  vec3 normal = normalize(vec3(-v_slope - radial * shape.r * 0.3 + toWorld(undulate, v_angle), 1.0));
 
-  // Faint, irregular radial veins, fading toward the rim and the centre.
-  float vein = smoothstep(0.93, 1.0, abs(cos(a * 11.0 + 2.2 * noise(vec2(r * 3.0, seed * 9.0)))));
-  vein *= smoothstep(0.1, 0.35, r) * (1.0 - smoothstep(0.6, 0.9, r)) * (0.5 + 0.5 * noise(vec2(a * 5.0, seed)));
-
-  vec3 green = mix(vec3(0.016, 0.05, 0.01), vec3(0.035, 0.08, 0.014), fbm(v_local * 2.0 + seed * 11.0));
-  vec3 colour = green * (1.0 + 0.18 * vein);
-  // Weathering: yellow-brown patches, and a reddish rim on older pads.
-  float aged = smoothstep(0.62, 0.8, fbm(v_local * 2.6 + seed * 23.0)) * v_look.z;
-  colour = mix(colour, vec3(0.16, 0.11, 0.025), aged);
-  colour = mix(colour, vec3(0.09, 0.035, 0.02), smoothstep(0.86, 1.0, r / rim) * (0.3 + 0.5 * v_look.z));
-
-  vec3 lit = lightInAir(colour, normal, 0.035 * (1.0 - aged), 40.0);
-  o_colour = vec4(lit * alpha, alpha);
+  vec3 lit = lightInAir(baked.rgb, normal, 0.035 * (1.0 - shape.g), 40.0);
+  o_colour = vec4(lit * baked.a, baked.a);
 }
 `;
 
@@ -202,6 +240,13 @@ export class Floating {
   private target: { framebuffer: WebGLFramebuffer; texture: WebGLTexture; width: number; height: number } | null = null;
   private aspect = 1;
   private lilies: Lilies;
+  private bakeProgram: Program;
+  private padAtlas: {
+    framebuffer: WebGLFramebuffer;
+    colour: WebGLTexture;
+    shape: WebGLTexture;
+    columns: number;
+  } | null = null;
 
   constructor(private gl: WebGL2RenderingContext) {
     this.programs = {
@@ -227,6 +272,7 @@ export class Floating {
     gl.bindVertexArray(null);
     this.buffers = [corners, instanceBuffer];
     this.lilies = new Lilies(gl);
+    this.bakeProgram = createProgram(gl, FULLSCREEN_VERT, PAD_BAKE_FRAG);
   }
 
   /** The floating layer: premultiplied lit colour and coverage, mipmapped for soft shadows. */
@@ -237,8 +283,10 @@ export class Floating {
   /**
    * Places everything for a pond `aspect` wide and 1 tall. `metres` per world
    * unit keeps sizes real: pads 14 to 26 cm across, lilies 10 to 14 cm.
+   * `pixelsPerUnit` (canvas pixels per world unit) sizes the pads' atlas so
+   * they're baked at the size they appear.
    */
-  place(counts: FloatingCounts, seed: number, aspect: number, metres: number) {
+  place(counts: FloatingCounts, seed: number, aspect: number, metres: number, pixelsPerUnit: number) {
     const rand = random(seed * 104729 + 7);
     const m = 1 / metres;
     this.aspect = aspect;
@@ -295,7 +343,63 @@ export class Floating {
     }
 
     this.floaters = [...pads, ...flowers];
+    this.bakePads(pads, pixelsPerUnit);
     this.lilies.set(flowers.map((f) => [f.look[0], f.look[1], f.look[2]]));
+  }
+
+  /**
+   * Draws each pad's colour and shape once into a square grid of cells,
+   * each about as many pixels across as the pad is on screen. Colour is
+   * kept in half floats, exactly as computed.
+   */
+  private bakePads(pads: Floater[], pixelsPerUnit: number) {
+    const { gl } = this;
+    this.disposeAtlas();
+    if (pads.length === 0) return;
+    const columns = Math.ceil(Math.sqrt(pads.length));
+    const largest = Math.max(...pads.map((p) => p.radius * 2 * pixelsPerUnit));
+    const maxSize = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
+    const cell = Math.min(Math.max(Math.ceil(largest), 16), 1024, Math.floor(maxSize / columns));
+    const size = cell * columns;
+    const texture = (format: number, type: number) => {
+      const t = gl.createTexture()!;
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.texImage2D(gl.TEXTURE_2D, 0, format, size, size, 0, gl.RGBA, type, null);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      return t;
+    };
+    const colour = texture(gl.RGBA16F, gl.HALF_FLOAT);
+    const shape = texture(gl.RGBA8, gl.UNSIGNED_BYTE);
+    const framebuffer = gl.createFramebuffer()!;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, colour, 0);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, shape, 0);
+    gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+
+    const { program, uniforms } = this.bakeProgram;
+    gl.disable(gl.BLEND);
+    gl.useProgram(program);
+    gl.bindVertexArray(this.vao);
+    pads.forEach((pad, i) => {
+      gl.viewport((i % columns) * cell, Math.floor(i / columns) * cell, cell, cell);
+      gl.uniform4f(uniforms.u_look, pad.look[0], pad.look[1], pad.look[2], 0);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      pad.look[3] = i;
+    });
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    this.padAtlas = { framebuffer, colour, shape, columns };
+  }
+
+  private disposeAtlas() {
+    if (!this.padAtlas) return;
+    const { gl } = this;
+    gl.deleteFramebuffer(this.padAtlas.framebuffer);
+    gl.deleteTexture(this.padAtlas.colour);
+    gl.deleteTexture(this.padAtlas.shape);
+    this.padAtlas = null;
   }
 
   /** A tap on the water: a pad it lands on is nudged away from it and turned a little. */
@@ -430,6 +534,15 @@ export class Floating {
       gl.uniform1f(uniforms.u_aspect, width / height);
       gl.uniform3fv(uniforms.u_sun, sun);
       gl.uniform3fv(uniforms.u_sky, sky);
+      if (kind === "pad" && this.padAtlas) {
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, this.padAtlas.colour);
+        gl.activeTexture(gl.TEXTURE2);
+        gl.bindTexture(gl.TEXTURE_2D, this.padAtlas.shape);
+        gl.uniform1i(uniforms.u_padColour, 1);
+        gl.uniform1i(uniforms.u_padShape, 2);
+        gl.uniform1i(uniforms.u_atlasColumns, this.padAtlas.columns);
+      }
       gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.instances, 0, count * FLOATS_PER_INSTANCE);
       gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, count);
     }
@@ -484,6 +597,8 @@ export class Floating {
     const { gl } = this;
     Object.values(this.programs).forEach((p) => gl.deleteProgram(p.program));
     this.lilies.dispose();
+    gl.deleteProgram(this.bakeProgram.program);
+    this.disposeAtlas();
     gl.deleteVertexArray(this.vao);
     this.buffers.forEach((b) => gl.deleteBuffer(b));
     if (this.target) {

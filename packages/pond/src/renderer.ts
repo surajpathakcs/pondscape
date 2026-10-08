@@ -185,15 +185,10 @@ void main() {
   vec2 bed = hitFloor(world, view, s.x);
   vec2 bedUv = bed / vec2(u_aspect, 1.0);
   vec4 floorMap = texture(u_bedMap, bedUv);
-  float depth = bedDepth(bed) - floorMap.a;
+  float depth = floorDepth(bed);
 
   // Which way the floor faces, from the slope of its height.
-  vec2 texel = 1.0 / vec2(textureSize(u_bedMap, 0));
-  vec2 rise = vec2(
-    texture(u_bedMap, bedUv + vec2(texel.x, 0.0)).a - texture(u_bedMap, bedUv - vec2(texel.x, 0.0)).a,
-    texture(u_bedMap, bedUv + vec2(0.0, texel.y)).a - texture(u_bedMap, bedUv - vec2(0.0, texel.y)).a
-  ) / (2.0 * texel * vec2(u_aspect, 1.0));
-  vec3 floorNormal = normalize(vec3(-rise, 1.0));
+  vec3 floorNormal = normalize(vec3(-texture(u_floor, bedUv).gb, 1.0));
 
   // Sunlight reaching the floor, and the floor's light coming back up, both
   // pass through water that absorbs each colour at its own rate. Under water
@@ -382,6 +377,7 @@ export class Renderer {
   draw(
     ripples: Ripples,
     bedMap: WebGLTexture,
+    floorMap: WebGLTexture,
     layer: LayerTarget,
     floating: Floating,
     emptyVao: WebGLVertexArrayObject,
@@ -434,7 +430,7 @@ export class Renderer {
     gl.blendFunc(gl.ONE, gl.ONE);
     u = this.use(this.causticsProgram);
     this.bindTexture(0, surface.texture, u.u_surface);
-    this.bindTexture(1, bedMap, u.u_bedMap);
+    this.bindTexture(1, floorMap, u.u_floor);
     gl.uniform3fv(u.u_sun, SUN);
     gl.uniform1f(u.u_depth, depth);
     gl.uniform1f(u.u_aspect, aspect);
@@ -452,6 +448,7 @@ export class Renderer {
     this.bindTexture(0, surface.texture, u.u_surface);
     this.bindTexture(1, caustics.texture, u.u_caustics);
     this.bindTexture(2, bedMap, u.u_bedMap);
+    this.bindTexture(6, floorMap, u.u_floor);
     this.bindTexture(3, layer.colour, u.u_layerColour);
     this.bindTexture(4, layer.depth, u.u_layerDepth);
     this.bindTexture(5, floatingLayer, u.u_floating);

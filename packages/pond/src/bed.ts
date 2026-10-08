@@ -1,5 +1,5 @@
 import { createFloatTarget, createProgram, deleteTarget, FULLSCREEN_VERT, type Program, type Target } from "./gl";
-import { NOISE } from "./shaders/common";
+import { BED_DEPTH, NOISE } from "./shaders/common";
 
 /*
  * The pond floor: its colour and how far it rises above the base depth,
@@ -114,6 +114,31 @@ void main() {
 }
 `;
 
+// The floor's depth below the surface (the bed's base depth less the
+// height of any pebble or stone on it), and how steeply the floor rises.
+const FLOOR_FRAG = /* glsl */ `#version 300 es
+precision highp float;
+in vec2 v_uv;
+out vec4 o_floor;
+
+uniform float u_depth;
+uniform float u_aspect;
+uniform sampler2D u_bedMap;
+
+${NOISE}
+${BED_DEPTH}
+
+void main() {
+  float height = texture(u_bedMap, v_uv).a;
+  vec2 texel = 1.0 / vec2(textureSize(u_bedMap, 0));
+  vec2 rise = vec2(
+    texture(u_bedMap, v_uv + vec2(texel.x, 0.0)).a - texture(u_bedMap, v_uv - vec2(texel.x, 0.0)).a,
+    texture(u_bedMap, v_uv + vec2(0.0, texel.y)).a - texture(u_bedMap, v_uv - vec2(0.0, texel.y)).a
+  ) / (2.0 * texel * vec2(u_aspect, 1.0));
+  o_floor = vec4(bedDepth(v_uv * vec2(u_aspect, 1.0)) - height, rise, 1.0);
+}
+`;
+
 export interface Stone {
   x: number;
   y: number;
@@ -166,10 +191,13 @@ export function scatterStones(count: number, seed: number, aspect: number, metre
 
 export class Bed {
   private program: Program;
+  private floorProgram: Program;
   private target: Target | null = null;
+  private floorTarget: Target | null = null;
 
   constructor(private gl: WebGL2RenderingContext) {
     this.program = createProgram(gl, FULLSCREEN_VERT, BED_FRAG);
+    this.floorProgram = createProgram(gl, FULLSCREEN_VERT, FLOOR_FRAG);
   }
 
   /** The bed map: rgb = linear colour, a = height above the base depth (world units). */
@@ -177,18 +205,26 @@ export class Bed {
     return this.target?.texture ?? null;
   }
 
-  /** Redraws the bed for a canvas of this shape. */
+  /** The floor map: r = depth of the floor below the surface (world units); gb = its slope. */
+  get floor() {
+    return this.floorTarget?.texture ?? null;
+  }
+
+  /** Redraws the bed for a canvas of this shape, `depth` being the pond's base depth. */
   draw(
     width: number,
     height: number,
     emptyVao: WebGLVertexArrayObject,
     silt: [number, number, number],
     stones: Stone[],
+    depth: number,
   ) {
     const { gl } = this;
     if (this.target?.width !== width || this.target?.height !== height) {
       if (this.target) deleteTarget(gl, this.target);
+      if (this.floorTarget) deleteTarget(gl, this.floorTarget);
       this.target = createFloatTarget(gl, width, height);
+      this.floorTarget = createFloatTarget(gl, width, height);
     }
     const stoneData = new Float32Array(MAX_STONES * 4);
     const lookData = new Float32Array(MAX_STONES * 4);
@@ -208,10 +244,22 @@ export class Bed {
     gl.uniform4fv(uniforms["u_stone[0]"], stoneData);
     gl.uniform4fv(uniforms["u_look[0]"], lookData);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    const floor = this.floorProgram;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.floorTarget!.framebuffer);
+    gl.useProgram(floor.program);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.target!.texture);
+    gl.uniform1i(floor.uniforms.u_bedMap, 0);
+    gl.uniform1f(floor.uniforms.u_depth, depth);
+    gl.uniform1f(floor.uniforms.u_aspect, width / height);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
   dispose() {
     if (this.target) deleteTarget(this.gl, this.target);
+    if (this.floorTarget) deleteTarget(this.gl, this.floorTarget);
     this.gl.deleteProgram(this.program.program);
+    this.gl.deleteProgram(this.floorProgram.program);
   }
 }
