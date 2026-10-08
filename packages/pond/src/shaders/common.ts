@@ -3,7 +3,8 @@
  *
  * World units: the canvas spans x = 0..aspect and y = 0..1, so one unit is
  * the canvas height. z points up, toward the viewer; the water surface sits
- * at z = 0 and the bed lies `bedDepth` below it.
+ * at z = 0, the base of the bed lies `bedDepth` below it, and pebbles and
+ * stones rise from there (see bed.ts).
  */
 
 export const NOISE = /* glsl */ `
@@ -37,12 +38,25 @@ float fbm(vec2 p) {
 export const BED = /* glsl */ `
 uniform float u_depth;
 uniform float u_aspect;
+uniform sampler2D u_bedMap; // rgb = colour, a = height above the base depth
 
 // Depth of the bed below the surface: uneven, and shallower toward the banks.
 float bedDepth(vec2 p) {
   vec2 edge = min(p, vec2(u_aspect, 1.0) - p);
   float bank = smoothstep(-0.05, 0.25, min(edge.x, edge.y));
   return u_depth * (0.85 + 0.35 * (fbm(p * 1.7) - 0.5)) * mix(0.55, 1.0, bank);
+}
+
+// Depth of whatever is down there first: silt, a pebble or a stone's top.
+float floorDepth(vec2 p) {
+  return bedDepth(p) - texture(u_bedMap, p / vec2(u_aspect, 1.0)).a;
+}
+
+// Where a ray entering the water at \`world\` heading along \`ray\` meets the
+// floor. A second step corrects for landing on a stone instead of silt.
+vec2 hitFloor(vec2 world, vec3 ray, float surfaceHeight) {
+  vec2 hit = world + ray.xy * ((floorDepth(world) + surfaceHeight) / -ray.z);
+  return world + ray.xy * ((floorDepth(hit) + surfaceHeight) / -ray.z);
 }
 `;
 

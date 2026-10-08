@@ -7,6 +7,7 @@ import {
   type Target,
 } from "./gl";
 import type { Ripples } from "./ripples";
+import type { LayerTarget } from "./underwater";
 import { BED, ETA, NOISE } from "./shaders/common";
 
 /*
@@ -19,10 +20,11 @@ import { BED, ETA, NOISE } from "./shaders/common";
  *    landed on the bed. Where rays bunch together the bed gets brighter, and
  *    where they spread it gets darker. This is the light web on a pond floor,
  *    computed rather than painted.
- * 3. Compose: look through the surface at the bed, light it with the
- *    caustics, let the water absorb colour with depth (red first, which is
- *    why ponds look green), then add reflection, sun glints, grain and
- *    vignette.
+ * 3. Compose: look through the surface at the floor and at anything in the
+ *    water above it (the underwater layer: grass, fish), light them with the
+ *    caustics and let what's in the water cast shadows on the floor, let the
+ *    water absorb colour with depth (red first, which is why ponds look
+ *    green), then add reflection, sun glints, grain and vignette.
  */
 
 const SURFACE_FRAG = /* glsl */ `#version 300 es
@@ -81,9 +83,7 @@ ${NOISE}
 ${BED}
 
 vec2 landOnBed(vec2 world, vec3 normal, float height) {
-  vec3 ray = refract(-u_sun, normal, ${ETA});
-  float drop = bedDepth(world) + height;
-  return world + ray.xy * (drop / -ray.z);
+  return hitFloor(world, refract(-u_sun, normal, ${ETA}), height);
 }
 
 void main() {
@@ -118,10 +118,11 @@ out vec4 o_color;
 
 uniform sampler2D u_surface;
 uniform sampler2D u_caustics;
+uniform sampler2D u_layerColour; // underwater layer: albedo × coverage, coverage
+uniform sampler2D u_layerDepth;  // underwater layer: depth × coverage, coverage
 uniform vec3 u_sun;
 uniform float u_time;
 uniform vec2 u_resolution;
-uniform vec3 u_bed;
 uniform vec3 u_absorb;   // per-channel absorption per world unit
 uniform vec3 u_murk;     // light scattered back by particles in the water
 uniform vec3 u_sky;
@@ -131,22 +132,30 @@ ${BED}
 
 const vec3 SUN_LIGHT = vec3(3.4, 3.2, 2.9);
 
-vec3 bedAlbedo(vec2 p) {
-  // Algae-covered silt: blotchy green-brown with fine speckle.
-  float blotch = fbm(p * 3.0);
-  float fine = fbm(p * 22.0);
-  vec3 c = u_bed * (0.6 + 0.8 * blotch);
-  c = mix(c, c * vec3(1.25, 1.05, 0.7), smoothstep(0.55, 0.75, fbm(p * 5.0 + 9.0)));
-  c *= 0.75 + 0.5 * fine;
-  return c * mix(0.55, 1.0, smoothstep(0.3, 0.55, fbm(p * 9.0 + 3.0)));
-}
-
 // Sky as seen in a reflection: bright overhead, framed by tree canopy.
 vec3 skyReflection(vec3 dir, vec2 p) {
   // Tilted water reflects a different patch of canopy, so a ripple's
   // slopes show up as bands of brighter and darker reflection.
   float leaves = smoothstep(0.3, 0.7, fbm(p * 1.5 + dir.xy * 9.0));
   return mix(u_sky, u_sky * vec3(0.18, 0.28, 0.16), leaves);
+}
+
+vec2 toUv(vec2 p) {
+  return p / vec2(u_aspect, 1.0);
+}
+
+// How much sunlight reaches this bit of floor past things in the water. The
+// light came slanting down from the sun's side, so look that way, as far as
+// the thing blocking it sits above the floor. Higher things cast softer,
+// fainter shadows, as their light spreads around them.
+float sunReaching(vec2 floorPoint, float floorDepthHere, vec3 toSun) {
+  vec2 slant = toSun.xy / toSun.z;
+  vec4 guess = textureLod(u_layerDepth, toUv(floorPoint + slant * floorDepthHere * 0.5), 2.0);
+  if (guess.a < 0.003) return 1.0;
+  float above = max(floorDepthHere - guess.r / guess.a, 0.0);
+  float blur = log2(1.0 + above * 300.0);
+  float blocked = textureLod(u_layerColour, toUv(floorPoint + slant * above), blur).a;
+  return 1.0 - blocked * mix(0.8, 0.45, clamp(above / u_depth, 0.0, 1.0));
 }
 
 vec3 tonemap(vec3 x) {
@@ -159,24 +168,66 @@ void main() {
   vec4 s = texture(u_surface, v_uv);
   vec3 normal = normalize(vec3(-s.yz, 1.0));
 
-  // Follow the view ray through the surface down to the bed.
+  // Follow the view ray through the surface down to the floor.
   vec3 view = refract(vec3(0.0, 0.0, -1.0), normal, ${ETA});
-  vec2 bed = world + view.xy * ((bedDepth(world) + s.x) / -view.z);
+  vec2 bed = hitFloor(world, view, s.x);
   vec2 bedUv = bed / vec2(u_aspect, 1.0);
-  float depth = bedDepth(bed);
+  vec4 floorMap = texture(u_bedMap, bedUv);
+  float depth = bedDepth(bed) - floorMap.a;
 
-  // Sunlight reaching the bed, and the bed's light coming back up, both
-  // pass through water that absorbs each colour at its own rate.
+  // Which way the floor faces, from the slope of its height.
+  vec2 texel = 1.0 / vec2(textureSize(u_bedMap, 0));
+  vec2 rise = vec2(
+    texture(u_bedMap, bedUv + vec2(texel.x, 0.0)).a - texture(u_bedMap, bedUv - vec2(texel.x, 0.0)).a,
+    texture(u_bedMap, bedUv + vec2(0.0, texel.y)).a - texture(u_bedMap, bedUv - vec2(0.0, texel.y)).a
+  ) / (2.0 * texel * vec2(u_aspect, 1.0));
+  vec3 floorNormal = normalize(vec3(-rise, 1.0));
+
+  // Sunlight reaching the floor, and the floor's light coming back up, both
+  // pass through water that absorbs each colour at its own rate. Under water
+  // the sun shines along its refracted direction, so stones are lit on the
+  // sun's side and shaded on the other.
   vec3 down = exp(-u_absorb * depth * 1.15);
   vec3 up = exp(-u_absorb * depth);
   float caustic = texture(u_caustics, bedUv).r;
-  vec3 light = SUN_LIGHT * caustic * down + u_sky * 0.08 * down;
-  vec3 color = bedAlbedo(bed) * light * up;
+  vec3 toSun = -refract(-u_sun, vec3(0.0, 0.0, 1.0), ${ETA});
+  float facing = max(dot(floorNormal, toSun), 0.0) / toSun.z;
+  float skyView = 0.5 + 0.5 * floorNormal.z;
+  float shade = sunReaching(bed, depth, toSun);
+  vec3 light = SUN_LIGHT * caustic * facing * shade * down + u_sky * 0.08 * skyView * down;
+  vec3 color = floorMap.rgb * light * up;
+
+  // Wet stones have a soft sheen where they turn the sunlight toward us.
+  float onStone = smoothstep(0.002, 0.01, floorMap.a);
+  float sheen = pow(max(reflect(-toSun, floorNormal).z, 0.0), 24.0) * onStone;
+  color += SUN_LIGHT * caustic * down * up * sheen * 0.06;
 
   // Water glows faintly with scattered light, more where it's deep, and a
   // little of the caustic brightness hangs in the water as haze.
   float haze = textureLod(u_caustics, bedUv, 4.0).r;
   color += u_murk * (1.0 - up) * (0.5 + 0.5 * haze);
+
+  // Things in the water between us and the floor. Look halfway down first,
+  // then again at the depth of whatever is there, so a blade near the
+  // surface wobbles less under the ripples than the floor beneath it.
+  vec2 guess = world + view.xy * ((floorDepth(world) * 0.5 + s.x) / -view.z);
+  vec4 seen = textureLod(u_layerDepth, toUv(guess), 0.0);
+  if (seen.a > 0.003) {
+    float objectDepth = seen.r / seen.a;
+    vec2 at = toUv(world + view.xy * ((objectDepth + s.x) / -view.z));
+    vec4 object = textureLod(u_layerColour, at, 0.0);
+    if (object.a > 0.003) {
+      objectDepth = textureLod(u_layerDepth, at, 0.0).r / max(textureLod(u_layerDepth, at, 0.0).a, 1e-4);
+      vec3 objectDown = exp(-u_absorb * objectDepth * 1.15);
+      vec3 objectUp = exp(-u_absorb * objectDepth);
+      // The light web focuses at the floor, so it's softer up in the water.
+      float objectCaustic = textureLod(u_caustics, at, 1.5).r;
+      vec3 lit = object.rgb / object.a
+        * (SUN_LIGHT * objectCaustic * objectDown + u_sky * 0.1 * objectDown) * objectUp
+        + u_murk * (1.0 - objectUp) * (0.5 + 0.5 * haze);
+      color = mix(color, lit, object.a);
+    }
+  }
 
   // Reflection: tiny looking straight down, stronger on tilted ripples.
   float fresnel = 0.02 + 0.98 * pow(1.0 - normal.z, 5.0);
@@ -205,6 +256,7 @@ void main() {
 `;
 
 export interface Palette {
+  /** Silt colour; used when drawing the bed map. */
   bed: [number, number, number];
   absorb: [number, number, number];
   murk: [number, number, number];
@@ -313,6 +365,8 @@ export class Renderer {
 
   draw(
     ripples: Ripples,
+    bedMap: WebGLTexture,
+    layer: LayerTarget,
     emptyVao: WebGLVertexArrayObject,
     time: number,
     { palette, depth, waves, metres }: RenderSettings,
@@ -359,6 +413,7 @@ export class Renderer {
     gl.blendFunc(gl.ONE, gl.ONE);
     u = this.use(this.causticsProgram);
     this.bindTexture(0, surface.texture, u.u_surface);
+    this.bindTexture(1, bedMap, u.u_bedMap);
     gl.uniform3fv(u.u_sun, SUN);
     gl.uniform1f(u.u_depth, depth);
     gl.uniform1f(u.u_aspect, aspect);
@@ -375,12 +430,14 @@ export class Renderer {
     u = this.use(this.composeProgram);
     this.bindTexture(0, surface.texture, u.u_surface);
     this.bindTexture(1, caustics.texture, u.u_caustics);
+    this.bindTexture(2, bedMap, u.u_bedMap);
+    this.bindTexture(3, layer.colour, u.u_layerColour);
+    this.bindTexture(4, layer.depth, u.u_layerDepth);
     gl.uniform3fv(u.u_sun, SUN);
     gl.uniform1f(u.u_depth, depth);
     gl.uniform1f(u.u_aspect, aspect);
     gl.uniform1f(u.u_time, time);
     gl.uniform2f(u.u_resolution, width, height);
-    gl.uniform3fv(u.u_bed, palette.bed);
     gl.uniform3fv(u.u_absorb, palette.absorb);
     gl.uniform3fv(u.u_murk, palette.murk);
     gl.uniform3fv(u.u_sky, palette.sky);
