@@ -1,0 +1,42 @@
+# Publishes pondscape to npm when a version tag (e.g. v0.2.0) is pushed.
+#
+# It uses npm trusted publishing: npm trusts this repository's workflow
+# directly, so no npm token is stored anywhere, and the package gets a
+# provenance badge linking it to the commit it was built from.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  id-token: write # lets npm verify the workflow's identity
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      # Trusted publishing needs npm 11.5.1 or later.
+      - run: npm install -g npm@latest
+
+      - run: npm ci
+
+      - name: Check the tag matches the package version
+        run: |
+          version=$(node -p "require('./packages/pondscape/package.json').version")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME doesn't match package version $version" >&2
+            exit 1
+          fi
+
+      # prepublishOnly type-checks and builds before publishing.
+      - run: npm publish --access public
+        working-directory: packages/pondscape
