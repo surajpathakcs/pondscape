@@ -1,18 +1,32 @@
 "use client";
 
 import { useState } from "react";
+import type { PondOptions } from "pond";
 import { Pond } from "pond/react";
+import { giftFish } from "./gift";
+
+/** The pond's usual six (what the default seed gives), so adding hers keeps them as they are. */
+const usualFish = ["sanke", "ogon", "karasu", "tancho", "showa", "platinum"] as const;
 
 export function PondDemo() {
   const [fps, setFps] = useState(0);
-  // Visit /?calm for still water, which shows the ripples on their own.
-  const calm = typeof window !== "undefined" && new URLSearchParams(window.location.search).has("calm");
+  // Try /?calm for still water, or counts like /?fish=0&axolotls=5&lilies=0.
+  const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
+  const count = (name: string) => (params?.has(name) ? Number(params.get(name)) : undefined);
+  const options: PondOptions = {
+    waves: params?.has("calm") ? 0 : undefined,
+    // /?gift adds her three fish to the usual six.
+    fish: params?.has("gift") ? [...usualFish.map((variety) => ({ variety })), ...giftFish] : count("fish"),
+    axolotls: count("axolotls"),
+    lilies: count("lilies"),
+    flowers: count("flowers"),
+  };
 
   return (
     <>
       <Pond
         className="absolute inset-0"
-        options={calm ? { waves: 0 } : undefined}
+        options={options}
         onReady={(pond) => {
           // A welcome splash so the first thing you see is the water moving.
           const { width, height } = pond.canvas.getBoundingClientRect();

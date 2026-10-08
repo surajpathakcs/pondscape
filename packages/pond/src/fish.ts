@@ -1,5 +1,6 @@
 import { random } from "./bed";
 import { createProgram, type Program } from "./gl";
+import { MarkAtlas, type KoiMark } from "./marks";
 import { NOISE } from "./shaders/common";
 
 /*
@@ -28,6 +29,8 @@ export interface FishSpec {
   variety?: KoiVariety;
   /** Body length in metres, without the tail fin. Default 0.18 to 0.26. */
   length?: number;
+  /** A custom marking on the top of the head. On a tancho it replaces the round spot. */
+  mark?: KoiMark;
 }
 
 /** Ripples a fish makes in the water, in world units and metres. */
@@ -37,7 +40,7 @@ export interface Splash {
 }
 
 const SPINE = 20;
-const FISH_TEXELS = SPINE + 2;
+const FISH_TEXELS = SPINE + 3;
 const MAX_FISH = 16;
 const BODY_ALONG = 40;
 const BODY_ACROSS = 12;
@@ -66,6 +69,7 @@ vec3 spineAt(float u) {
 
 vec4 fishParams() { return texelFetch(u_fish, ivec2(SPINE, u_index), 0); }     // length; depth; variety; seed
 vec4 fishMotion() { return texelFetch(u_fish, ivec2(SPINE + 1, u_index), 0); } // fin phase; fold; tail lag; -
+vec4 fishMark() { return texelFetch(u_fish, ivec2(SPINE + 2, u_index), 0); }   // colour; strength (0: none)
 
 // Half the body's width, as a fraction of its length: a blunt, rounded
 // head, widest at the shoulders, tapering to a slim tail root.
@@ -114,7 +118,7 @@ float colourPatch(float n, float level) {
 }
 
 // Albedo at a point on the body. p is in body lengths (along, across).
-vec3 koiPattern(vec2 p, float u, float v, int variety, float seed) {
+vec3 koiPattern(vec2 p, float u, float v, int variety, float seed, bool marked) {
   // Patterns sit on the back; the flanks we glimpse are paler.
   float back = 1.0 - smoothstep(0.6, 1.0, abs(v));
   // Red (hi): big patches, often on the head, rarely on the snout or the tail root.
@@ -133,6 +137,7 @@ vec3 koiPattern(vec2 p, float u, float v, int variety, float seed) {
     return mix(mix(BLACK, WHITE, white), RED, hi * white);
   }
   if (variety == 3) {                                                             // tancho
+    if (marked) return WHITE;
     float spot = 1.0 - smoothstep(0.036, 0.044, length(p - vec2(0.13, 0.0)));
     return mix(WHITE, RED, spot);
   }
@@ -159,6 +164,23 @@ ${NOISE}
 ${PATTERN}
 
 uniform vec3 u_toSun; // toward the sun, under water
+uniform sampler2D u_marks;
+uniform float u_markCells;
+
+// A custom mark, laid on the head like one more colour patch: its edge
+// wanders a little and its colour is mottled, as real koi patches are.
+vec3 applyMark(vec3 albedo, vec2 p, float seed) {
+  vec4 mark = fishMark();
+  if (mark.a <= 0.0) return albedo;
+  const float SIZE = 0.115; // body lengths
+  // Top of the mark toward the snout; its left on the fish's left.
+  vec2 m = vec2(0.5 - p.y / SIZE, (p.x - 0.13) / SIZE + 0.5);
+  m += (vec2(fbm(p * 38.0 + seed * 5.0), fbm(p * 38.0 + seed * 9.0 + 4.0)) - 0.5) * 0.07;
+  if (any(lessThan(m, vec2(0.0))) || any(greaterThan(m, vec2(1.0)))) return albedo;
+  float ink = texture(u_marks, vec2((float(u_index) + m.x) / u_markCells, m.y)).r;
+  float shape = smoothstep(0.3, 0.7, ink) * mark.a * (0.78 + 0.22 * fbm(p * 22.0 + seed * 3.0));
+  return mix(albedo, mark.rgb, shape);
+}
 
 void main() {
   vec4 params = fishParams();
@@ -167,7 +189,7 @@ void main() {
   float u = v_uv.x, v = v_uv.y;
   vec2 p = vec2(u, v * halfWidth(u));
 
-  vec3 albedo = koiPattern(p, u, v, variety, seed);
+  vec3 albedo = applyMark(koiPattern(p, u, v, variety, seed, fishMark().a > 0.0), p, seed);
 
   // A fine net of scales, fading out where it would be too fine to see.
   vec2 g = p * 46.0;
@@ -332,6 +354,8 @@ interface Koi {
   rising: boolean;
   lastWake: { x: number; y: number };
   lastBeat: number;
+  /** Mark colour (linear) and strength, 0 for none. */
+  mark: [number, number, number, number];
 }
 
 /** Smooth 1D value noise in 0..1. */
@@ -361,6 +385,7 @@ export class School {
   private bodyCount: number;
   private finCount: number;
   private texture: WebGLTexture;
+  private marks: MarkAtlas;
   private data = new Float32Array(MAX_FISH * FISH_TEXELS * 4);
   private aspect = 1;
   private metres = 1;
@@ -407,6 +432,7 @@ export class School {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, FISH_TEXELS, MAX_FISH, 0, gl.RGBA, gl.FLOAT, null);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    this.marks = new MarkAtlas(gl, MAX_FISH);
   }
 
   /** Releases fish into a pond `aspect` wide and 1 tall, at `metres` per world unit. */
@@ -414,7 +440,7 @@ export class School {
     const rand = random(seed * 15485863 + 3);
     this.aspect = aspect;
     this.metres = metres;
-    this.fish = specs.slice(0, MAX_FISH).map((spec) => {
+    this.fish = specs.slice(0, MAX_FISH).map((spec, index) => {
       const lengthM = spec.length ?? 0.18 + 0.08 * rand();
       const length = lengthM / metres;
       const heading = rand() * Math.PI * 2;
@@ -450,6 +476,7 @@ export class School {
         rising: false,
         lastWake: { x, y },
         lastBeat: 0,
+        mark: this.marks.set(index, spec.mark),
       };
     });
   }
@@ -614,11 +641,15 @@ export class School {
       [this.fins, this.finVao, this.finCount, FINS],
       [this.body, this.bodyVao, this.bodyCount, 1],
     ] as const;
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.marks.texture);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.texture);
     for (const [program] of parts) {
       gl.useProgram(program.program);
       gl.uniform1i(program.uniforms.u_fish, 0);
+      gl.uniform1i(program.uniforms.u_marks, 1);
+      gl.uniform1f(program.uniforms.u_markCells, this.marks.cellCount);
       gl.uniform1f(program.uniforms.u_aspect, this.aspect);
       gl.uniform3fv(program.uniforms.u_toSun, toSun);
     }
@@ -663,6 +694,7 @@ export class School {
       const fold = Math.min(1, f.dart * 1.6);
       data.set([L, f.depth, f.variety, f.seed], base + SPINE * 4);
       data.set([f.finPhase, fold, lag, 0], base + (SPINE + 1) * 4);
+      data.set(f.mark, base + (SPINE + 2) * 4);
     });
     gl.bindTexture(gl.TEXTURE_2D, this.texture);
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, FISH_TEXELS, this.fish.length, gl.RGBA, gl.FLOAT, data);
@@ -676,5 +708,6 @@ export class School {
     gl.deleteVertexArray(this.finVao);
     this.buffers.forEach((b) => gl.deleteBuffer(b));
     gl.deleteTexture(this.texture);
+    this.marks.dispose();
   }
 }

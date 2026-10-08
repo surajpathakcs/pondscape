@@ -1,3 +1,4 @@
+import { Axolotls, type AxolotlSpec } from "./axolotl";
 import { Bed, scatterStones } from "./bed";
 import { School, type FishSpec, type Splash } from "./fish";
 import { Floating } from "./floating";
@@ -50,6 +51,8 @@ export interface PondOptions {
    * Up to 16. Default 6.
    */
   fish?: number | FishSpec[];
+  /** The axolotls: how many (in a mix of morphs), or a list describing each. Up to 8. Default 2. */
+  axolotls?: number | AxolotlSpec[];
   /** Picks the layout of stones and pebbles; the same seed always gives the same pond. Default 1. */
   seed?: number;
   palette?: Partial<PondPalette>;
@@ -112,6 +115,14 @@ function fishSpecs(fish: number | FishSpec[], seed: number): FishSpec[] {
   return Array.from({ length: fish }, (_, i) => ({ variety: mix[(start + i) % mix.length] }));
 }
 
+/** A mix of morphs for a number of axolotls, or the list as given. */
+function axolotlSpecs(count: number | AxolotlSpec[], seed: number): AxolotlSpec[] {
+  if (Array.isArray(count)) return count;
+  const mix = ["leucistic", "wild", "golden", "copper", "melanoid"] as const;
+  const start = Math.abs(Math.floor(seed)) % mix.length;
+  return Array.from({ length: count }, (_, i) => ({ morph: mix[(start + i * 2) % mix.length] }));
+}
+
 /** The direction toward the sun as seen from under water (refracted at the surface). */
 function refractedSun(): [number, number, number] {
   // Snell: the horizontal part shrinks by 1/1.333; the ray stays unit length.
@@ -143,6 +154,7 @@ export function createPond(canvas: HTMLCanvasElement, options: PondOptions = {})
     lilies = 9,
     flowers = 3,
     fish = 6,
+    axolotls = 2,
     seed = 1,
   } = options;
   const quality =
@@ -179,6 +191,7 @@ export function createPond(canvas: HTMLCanvasElement, options: PondOptions = {})
   const current = seed * 2.399963;
   const ripples = new Ripples(gl);
   const school = new School(gl);
+  const salamanders = new Axolotls(gl);
   let released = false;
   // The fish see the sun through the surface, bent toward straight down.
   const toSunUnderwater = refractedSun();
@@ -213,9 +226,12 @@ export function createPond(canvas: HTMLCanvasElement, options: PondOptions = {})
     plants.set(growGrass(grass, seed, aspect, metres, current));
     floating.place({ lilies, flowers }, seed, aspect, metres);
     // Fish are released once; later resizes keep them where they are.
-    if (released) school.resize(aspect, metres);
-    else {
+    if (released) {
+      school.resize(aspect, metres);
+      salamanders.resize(aspect, metres, depth);
+    } else {
       school.populate(fishSpecs(fish, seed), seed, aspect, metres);
+      salamanders.populate(axolotlSpecs(axolotls, seed), seed, aspect, metres, depth);
       released = true;
     }
   }
@@ -301,10 +317,13 @@ export function createPond(canvas: HTMLCanvasElement, options: PondOptions = {})
     fingerLast = dragTo;
     floating.step(dt, finger);
     school.step(dt, finger, splash);
+    salamanders.step(dt, finger, splash);
     if (dragging) emitDrag();
     ripples.build(vao);
     underwater.begin();
     plants.draw(time, cssWidth / cssHeight, depth, bed.texture);
+    // Axolotls keep to the floor, below the fish.
+    salamanders.draw(toSunUnderwater);
     school.draw(toSunUnderwater);
     underwater.end();
     renderer.draw(ripples, bed.texture, layer, floating, vao, time, { palette, depth, waves, metres });
@@ -333,6 +352,7 @@ export function createPond(canvas: HTMLCanvasElement, options: PondOptions = {})
     ripples.tap(p.x, p.y, time, TAP_DEPTH);
     floating.tap(p.x, p.y);
     school.startle(p.x, p.y);
+    salamanders.startle(p.x, p.y);
     dragging = true;
     dragFrom = { ...p, time };
     dragTo = p;
@@ -380,6 +400,7 @@ export function createPond(canvas: HTMLCanvasElement, options: PondOptions = {})
       bed.dispose();
       plants.dispose();
       school.dispose();
+      salamanders.dispose();
       floating.dispose();
       underwater.dispose();
       renderer.dispose();
