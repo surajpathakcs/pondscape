@@ -17,6 +17,13 @@
   ],
   "author": "surajpathakcs",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/surajpathakcs/pondscape.git",
+    "directory": "packages/pondscape"
+  },
+  "homepage": "https://github.com/surajpathakcs/pondscape#readme",
+  "bugs": "https://github.com/surajpathakcs/pondscape/issues",
   "type": "module",
   "sideEffects": false,
   "exports": {
