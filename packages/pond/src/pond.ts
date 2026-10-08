@@ -1,4 +1,5 @@
 import { Bed, scatterStones } from "./bed";
+import { Floating } from "./floating";
 import { enableFloatTargets, parseColor } from "./gl";
 import { Grass, growGrass } from "./grass";
 import { Underwater } from "./underwater";
@@ -39,6 +40,10 @@ export interface PondOptions {
   stones?: number;
   /** How many clumps of grass grow in the shallows. Default 5. */
   grass?: number;
+  /** How many lily pads float on the surface. Default 9. */
+  lilies?: number;
+  /** How many water lilies bloom on the pads. Default 3. */
+  flowers?: number;
   /** Picks the layout of stones and pebbles; the same seed always gives the same pond. Default 1. */
   seed?: number;
   palette?: Partial<PondPalette>;
@@ -75,6 +80,8 @@ const QUALITY = {
   high: { surface: 400, caustics: 1024, bed: 1024 },
 };
 
+/** Radius of a fingertip, metres. */
+const FINGER_RADIUS = 0.01;
 /** How deep a fingertip tap pushes the water, metres. */
 const TAP_DEPTH = 0.007;
 /** Depth of the dent a finger carries as it moves through the water, metres. */
@@ -111,6 +118,8 @@ export function createPond(canvas: HTMLCanvasElement, options: PondOptions = {})
     waves = 0.4,
     stones = 6,
     grass = 5,
+    lilies = 9,
+    flowers = 3,
     seed = 1,
   } = options;
   const quality =
@@ -142,6 +151,7 @@ export function createPond(canvas: HTMLCanvasElement, options: PondOptions = {})
   const bed = new Bed(gl);
   const underwater = new Underwater(gl);
   const plants = new Grass(gl);
+  const floating = new Floating(gl);
   // The direction the pond's slow current flows, which the grass leans with.
   const current = seed * 2.399963;
   const ripples = new Ripples(gl);
@@ -174,6 +184,7 @@ export function createPond(canvas: HTMLCanvasElement, options: PondOptions = {})
     const layerScale = quality.caustics / Math.max(cssWidth, cssHeight);
     underwater.resize(Math.round(cssWidth * layerScale), Math.round(cssHeight * layerScale));
     plants.set(growGrass(grass, seed, aspect, metres, current));
+    floating.place({ lilies, flowers }, seed, aspect, metres);
   }
 
   /** CSS pixels from the top-left to world units (y up, canvas height = 1). */
@@ -193,6 +204,7 @@ export function createPond(canvas: HTMLCanvasElement, options: PondOptions = {})
   let dragging = false;
   let dragFrom = { x: 0, y: 0, time: 0 };
   let dragTo = { x: 0, y: 0 };
+  let fingerLast = { x: 0, y: 0 };
 
   function emitDrag() {
     const dx = dragTo.x - dragFrom.x;
@@ -236,12 +248,25 @@ export function createPond(canvas: HTMLCanvasElement, options: PondOptions = {})
     if (cssWidth === 0 || !bed.texture || !layer) return;
 
     time += dt;
+    // A finger in the water shoves floating things; its speed comes from
+    // how far it moved since the last frame.
+    const finger = dragging
+      ? {
+          x: dragTo.x,
+          y: dragTo.y,
+          vx: dt > 0 ? (dragTo.x - fingerLast.x) / dt : 0,
+          vy: dt > 0 ? (dragTo.y - fingerLast.y) / dt : 0,
+          radius: FINGER_RADIUS / metres,
+        }
+      : null;
+    fingerLast = dragTo;
+    floating.step(dt, finger);
     if (dragging) emitDrag();
     ripples.build(vao);
     underwater.begin();
     plants.draw(time, cssWidth / cssHeight, depth, bed.texture);
     underwater.end();
-    renderer.draw(ripples, bed.texture, layer, vao, time, { palette, depth, waves, metres });
+    renderer.draw(ripples, bed.texture, layer, floating, vao, time, { palette, depth, waves, metres });
   }
 
   function resume() {
@@ -265,9 +290,11 @@ export function createPond(canvas: HTMLCanvasElement, options: PondOptions = {})
   function onPointerDown(e: PointerEvent) {
     const p = local(e);
     ripples.tap(p.x, p.y, time, TAP_DEPTH);
+    floating.tap(p.x, p.y);
     dragging = true;
     dragFrom = { ...p, time };
     dragTo = p;
+    fingerLast = p;
   }
 
   function onPointerMove(e: PointerEvent) {
@@ -310,6 +337,7 @@ export function createPond(canvas: HTMLCanvasElement, options: PondOptions = {})
       ripples.dispose();
       bed.dispose();
       plants.dispose();
+      floating.dispose();
       underwater.dispose();
       renderer.dispose();
       gl.deleteVertexArray(vao);

@@ -6,6 +6,7 @@ import {
   type Program,
   type Target,
 } from "./gl";
+import type { Floating } from "./floating";
 import type { Ripples } from "./ripples";
 import type { LayerTarget } from "./underwater";
 import { BED, ETA, NOISE } from "./shaders/common";
@@ -24,7 +25,9 @@ import { BED, ETA, NOISE } from "./shaders/common";
  *    water above it (the underwater layer: grass, fish), light them with the
  *    caustics and let what's in the water cast shadows on the floor, let the
  *    water absorb colour with depth (red first, which is why ponds look
- *    green), then add reflection, sun glints, grain and vignette.
+ *    green), then add reflection and sun glints, lay the floating layer
+ *    (lily pads and the like, see floating.ts) on top, and finish with
+ *    grain and vignette.
  */
 
 const SURFACE_FRAG = /* glsl */ `#version 300 es
@@ -120,6 +123,7 @@ uniform sampler2D u_surface;
 uniform sampler2D u_caustics;
 uniform sampler2D u_layerColour; // underwater layer: albedo × coverage, coverage
 uniform sampler2D u_layerDepth;  // underwater layer: depth × coverage, coverage
+uniform sampler2D u_floating;    // floating layer: lit colour × coverage, coverage
 uniform vec3 u_sun;
 uniform float u_time;
 uniform vec2 u_resolution;
@@ -158,6 +162,14 @@ float sunReaching(vec2 floorPoint, float floorDepthHere, vec3 toSun) {
   return 1.0 - blocked * mix(0.8, 0.45, clamp(above / u_depth, 0.0, 1.0));
 }
 
+// Sunlight reaching the floor past things floating on the surface: they
+// block it completely, but the depth of water between softens the edge.
+float sunPastFloating(vec2 floorPoint, float depthHere, vec3 toSun) {
+  vec2 from = floorPoint + toSun.xy / toSun.z * depthHere;
+  float blocked = textureLod(u_floating, toUv(from), log2(1.0 + depthHere * 40.0)).a;
+  return 1.0 - 0.9 * blocked;
+}
+
 vec3 tonemap(vec3 x) {
   // ACES fit (Narkowicz): filmic shoulder so bright caustics don't clip flat.
   return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
@@ -193,7 +205,7 @@ void main() {
   vec3 toSun = -refract(-u_sun, vec3(0.0, 0.0, 1.0), ${ETA});
   float facing = max(dot(floorNormal, toSun), 0.0) / toSun.z;
   float skyView = 0.5 + 0.5 * floorNormal.z;
-  float shade = sunReaching(bed, depth, toSun);
+  float shade = sunReaching(bed, depth, toSun) * sunPastFloating(bed, depth, toSun);
   vec3 light = SUN_LIGHT * caustic * facing * shade * down + u_sky * 0.08 * skyView * down;
   vec3 color = floorMap.rgb * light * up;
 
@@ -236,6 +248,10 @@ void main() {
   vec3 halfway = normalize(u_sun + vec3(0.0, 0.0, 1.0));
   float steep = smoothstep(0.25, 0.5, length(s.yz));
   color += SUN_LIGHT * pow(max(dot(normal, halfway), 0.0), 4000.0) * 0.4 * steep;
+
+  // Things floating on the surface sit over everything below.
+  vec4 floating = textureLod(u_floating, v_uv, 0.0);
+  color = color * (1.0 - floating.a) + floating.rgb;
 
   color = tonemap(color);
   // Bright light washes out toward white, as it does on a camera sensor.
@@ -367,6 +383,7 @@ export class Renderer {
     ripples: Ripples,
     bedMap: WebGLTexture,
     layer: LayerTarget,
+    floating: Floating,
     emptyVao: WebGLVertexArrayObject,
     time: number,
     { palette, depth, waves, metres }: RenderSettings,
@@ -403,6 +420,10 @@ export class Renderer {
     ripples.draw(time, aspect, metres, false);
     gl.disable(gl.BLEND);
 
+    // Floating things read the finished surface to ride it.
+    floating.draw(width, height, surface.texture, SUN, palette.sky);
+    const floatingLayer = floating.texture!;
+
     // 2. Caustics: add up the light every ray brings to each pixel of the bed.
     gl.bindVertexArray(emptyVao);
     gl.bindFramebuffer(gl.FRAMEBUFFER, caustics.framebuffer);
@@ -433,6 +454,7 @@ export class Renderer {
     this.bindTexture(2, bedMap, u.u_bedMap);
     this.bindTexture(3, layer.colour, u.u_layerColour);
     this.bindTexture(4, layer.depth, u.u_layerDepth);
+    this.bindTexture(5, floatingLayer, u.u_floating);
     gl.uniform3fv(u.u_sun, SUN);
     gl.uniform1f(u.u_depth, depth);
     gl.uniform1f(u.u_aspect, aspect);
