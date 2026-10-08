@@ -1,0 +1,59 @@
+{
+  "name": "pondscape",
+  "version": "0.1.0",
+  "description": "A living, realistic pond for the web: physically based water, caustics, lily pads, koi and axolotls, rendered with WebGL2.",
+  "keywords": [
+    "pond",
+    "water",
+    "webgl",
+    "webgl2",
+    "koi",
+    "axolotl",
+    "caustics",
+    "ripples",
+    "animation",
+    "react",
+    "canvas"
+  ],
+  "author": "surajpathakcs",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./react": {
+      "types": "./dist/react.d.ts",
+      "import": "./dist/react.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\" && tsup",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run typecheck && npm run build"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/react": "^19",
+    "tsup": "^8.5.1",
+    "typescript": "^5"
+  }
+}

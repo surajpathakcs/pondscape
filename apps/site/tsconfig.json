@@ -19,7 +19,9 @@
       }
     ],
     "paths": {
-      "@/*": ["./*"]
+      "@/*": ["./*"],
+      "pondscape": ["../../packages/pondscape/src/index.ts"],
+      "pondscape/react": ["../../packages/pondscape/src/react.tsx"]
     }
   },
   "include": [
