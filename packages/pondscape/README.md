@@ -139,10 +139,6 @@ Also exported: `isPondSupported()`, `defaultPalette`, `koiVarieties`, `axolotlMo
 
 Any browser with WebGL2 that can render to floating-point textures: current Chrome, Edge, Firefox and Safari (iOS 15 and later). Check with `isPondSupported()`, or use the React component's `fallback`. `createPond()` throws on devices that can't run it.
 
-## Credits
-
-Inspired by [Anish's axolotl pond](https://lab.anishfn.ink/axolotl-pond) and the koi pond that inspired it. pondscape is a separate, from-scratch implementation.
-
 ## License
 
 MIT
