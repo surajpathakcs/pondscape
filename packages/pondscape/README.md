@@ -1,5 +1,7 @@
 # pondscape
 
+![A pond rendered by pondscape: koi, an axolotl, lily pads and water lilies over a sunlit pond floor, with a ripple spreading from a tap](https://raw.githubusercontent.com/surajpathakcs/pondscape/main/packages/pondscape/screenshot.jpg)
+
 A living pond for the web. Real-time water with physically based ripples and caustics, lily pads and water lilies, swaying grass, koi and axolotls, all rendered with WebGL2 into a single canvas.
 
 - **Water that behaves like water.** Ripples follow the physics of real surface waves: they spread into trains of rings, travel at real speeds, and fade the way they do in a pond. A finger dragged through the water leaves a proper wake.
