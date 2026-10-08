@@ -15,7 +15,10 @@
     "react",
     "canvas"
   ],
-  "author": "surajpathakcs",
+  "author": {
+    "name": "Suraj Pathak",
+    "url": "https://github.com/surajpathakcs"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",
