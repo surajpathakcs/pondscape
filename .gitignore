@@ -42,3 +42,6 @@ next-env.d.ts
 
 # library build output
 dist/
+
+# The demo site is kept locally, not in the repository.
+apps/site/
