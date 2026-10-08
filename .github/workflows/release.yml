@@ -40,5 +40,5 @@ jobs:
           fi
 
       # prepublishOnly type-checks and builds before staging.
-      - run: npm stage publish --access public
+      - run: npm stage publish --access public --loglevel verbose
         working-directory: packages/pondscape
