@@ -1,4 +1,6 @@
-# Publishes pondscape to npm when a version tag (e.g. v0.2.0) is pushed.
+# Stages pondscape on npm when a version tag (e.g. v0.2.0) is pushed. It
+# goes live once approved on npmjs.com (or with `npm stage approve`), so
+# nothing ships without the maintainer's two-factor sign-off.
 #
 # It uses npm trusted publishing: npm trusts this repository's workflow
 # directly, so no npm token is stored anywhere, and the package gets a
@@ -24,7 +26,7 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
-      # Trusted publishing needs npm 11.5.1 or later.
+      # Trusted publishing needs npm 11.5.1 or later; staging, npm 12.
       - run: npm install -g npm@latest
 
       - run: npm ci
@@ -37,6 +39,6 @@ jobs:
             exit 1
           fi
 
-      # prepublishOnly type-checks and builds before publishing.
-      - run: npm publish --access public
+      # prepublishOnly type-checks and builds before staging.
+      - run: npm stage publish --access public
         working-directory: packages/pondscape
