@@ -1,4 +1,4 @@
-import type { FishSpec } from "pond";
+import type { FishSpec } from "pondscape";
 
 /*
  * Her fish: three tancho whose red head patch is shaped, not round. The S

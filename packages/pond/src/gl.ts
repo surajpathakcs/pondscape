@@ -22,7 +22,7 @@ function compile(gl: WebGL2RenderingContext, type: number, source: string) {
   if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
     const log = gl.getShaderInfoLog(shader);
     gl.deleteShader(shader);
-    throw new Error(`pond: shader failed to compile\n${log}`);
+    throw new Error(`pondscape: shader failed to compile\n${log}`);
   }
   return shader;
 }
@@ -43,7 +43,7 @@ export function createProgram(
   if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
     const log = gl.getProgramInfoLog(program);
     gl.deleteProgram(program);
-    throw new Error(`pond: program failed to link\n${log}`);
+    throw new Error(`pondscape: program failed to link\n${log}`);
   }
 
   const uniforms: Record<string, WebGLUniformLocation> = {};
@@ -89,7 +89,7 @@ export function createFloatTarget(
   const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   if (status !== gl.FRAMEBUFFER_COMPLETE) {
-    throw new Error("pond: this device can't render to half-float textures");
+    throw new Error("pondscape: this device can't render to half-float textures");
   }
   return { texture, framebuffer, width, height };
 }
@@ -112,7 +112,7 @@ export function parseColor(hex: string): [number, number, number] {
   if (h.length === 3) h = h.replace(/./g, (c) => c + c);
   const n = parseInt(h, 16);
   if (h.length !== 6 || Number.isNaN(n)) {
-    throw new Error(`pond: "${hex}" is not a hex color like #3a7 or #33aa77`);
+    throw new Error(`pondscape: "${hex}" is not a hex color like #3a7 or #33aa77`);
   }
   return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
 }

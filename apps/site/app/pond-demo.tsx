@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import type { PondOptions } from "pond";
-import { Pond } from "pond/react";
+import type { PondOptions } from "pondscape";
+import { Pond } from "pondscape/react";
 import { giftFish } from "./gift";
 
 /** The pond's usual six (what the default seed gives), so adding hers keeps them as they are. */

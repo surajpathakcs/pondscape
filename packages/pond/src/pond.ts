@@ -175,9 +175,9 @@ export function createPond(canvas: HTMLCanvasElement, options: PondOptions = {})
   };
 
   const gl = canvas.getContext("webgl2", { antialias: false, alpha: false });
-  if (!gl) throw new Error("pond: WebGL2 isn't available in this browser");
+  if (!gl) throw new Error("pondscape: WebGL2 isn't available in this browser");
   if (!enableFloatTargets(gl)) {
-    throw new Error("pond: this device can't render to float textures");
+    throw new Error("pondscape: this device can't render to float textures");
   }
 
   // Drawing without vertex buffers still needs a vertex array bound.
