@@ -13,9 +13,9 @@ const SEGMENTS = 14;
 
 const GRASS_VERT = /* glsl */ `#version 300 es
 precision highp float;
-in vec2 a_along;  // position along the blade 0..1; which edge -1 or 1
-in vec4 a_root;   // root x, y (world units); lean angle; phase
-in vec2 a_size;   // length, width at the root (world units)
+layout(location = 0) in vec2 a_along;  // position along the blade 0..1; which edge -1 or 1
+layout(location = 1) in vec4 a_root;   // root x, y (world units); lean angle; phase
+layout(location = 2) in vec2 a_size;   // length, width at the root (world units)
 
 uniform float u_time;
 uniform float u_current; // the current's direction, radians
@@ -138,21 +138,19 @@ export class Grass {
     const stripBuffer = gl.createBuffer()!;
     gl.bindBuffer(gl.ARRAY_BUFFER, stripBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, strip, gl.STATIC_DRAW);
-    const along = gl.getAttribLocation(this.program.program, "a_along");
-    gl.enableVertexAttribArray(along);
-    gl.vertexAttribPointer(along, 2, gl.FLOAT, false, 0, 0);
+    // Attribute locations are fixed in the shader, so this doesn't wait for it to compile.
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
 
     const bladeBuffer = gl.createBuffer()!;
     gl.bindBuffer(gl.ARRAY_BUFFER, bladeBuffer);
     const stride = 6 * 4;
-    const root = gl.getAttribLocation(this.program.program, "a_root");
-    gl.enableVertexAttribArray(root);
-    gl.vertexAttribPointer(root, 4, gl.FLOAT, false, stride, 0);
-    gl.vertexAttribDivisor(root, 1);
-    const size = gl.getAttribLocation(this.program.program, "a_size");
-    gl.enableVertexAttribArray(size);
-    gl.vertexAttribPointer(size, 2, gl.FLOAT, false, stride, 16);
-    gl.vertexAttribDivisor(size, 1);
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 4, gl.FLOAT, false, stride, 0);
+    gl.vertexAttribDivisor(1, 1);
+    gl.enableVertexAttribArray(2);
+    gl.vertexAttribPointer(2, 2, gl.FLOAT, false, stride, 16);
+    gl.vertexAttribDivisor(2, 1);
     gl.bindVertexArray(null);
     this.buffers = [stripBuffer, bladeBuffer];
   }

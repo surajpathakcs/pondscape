@@ -76,7 +76,7 @@ void main() {
 
 const CAUSTICS_VERT = /* glsl */ `#version 300 es
 precision highp float;
-in vec2 a_uv;
+layout(location = 0) in vec2 a_uv;
 out vec2 v_flat;
 out vec2 v_bent;
 
@@ -365,9 +365,8 @@ export class Renderer {
     const positionBuffer = gl.createBuffer()!;
     gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
-    const location = gl.getAttribLocation(this.causticsProgram.program, "a_uv");
-    gl.enableVertexAttribArray(location);
-    gl.vertexAttribPointer(location, 2, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
     const indexBuffer = gl.createBuffer()!;
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);

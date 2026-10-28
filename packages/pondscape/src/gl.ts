@@ -12,47 +12,77 @@ void main() {
 
 export interface Program {
   program: WebGLProgram;
+  /** Empty until the program has linked; see programsReady. */
   uniforms: Record<string, WebGLUniformLocation>;
 }
 
-function compile(gl: WebGL2RenderingContext, type: number, source: string) {
+// Asking whether a program compiled makes the page wait until it has. For all
+// of the pond's programs that was seconds on a browser with no shader cache,
+// with the page frozen; so programs are started here and only asked about
+// once the browser says they're done.
+const compiling = new WeakMap<
+  WebGL2RenderingContext,
+  { parallel: KHR_parallel_shader_compile | null; pending: { program: Program; shaders: WebGLShader[] }[] }
+>();
+
+function shader(gl: WebGL2RenderingContext, type: number, source: string) {
   const shader = gl.createShader(type)!;
   gl.shaderSource(shader, source);
   gl.compileShader(shader);
-  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-    const log = gl.getShaderInfoLog(shader);
-    gl.deleteShader(shader);
-    throw new Error(`pondscape: shader failed to compile\n${log}`);
-  }
   return shader;
 }
 
+/** Starts compiling and linking a program, and returns without waiting for it. */
 export function createProgram(
   gl: WebGL2RenderingContext,
   vertexSource: string,
   fragmentSource: string,
 ): Program {
-  const vs = compile(gl, gl.VERTEX_SHADER, vertexSource);
-  const fs = compile(gl, gl.FRAGMENT_SHADER, fragmentSource);
+  let state = compiling.get(gl);
+  if (!state) {
+    state = { parallel: gl.getExtension("KHR_parallel_shader_compile"), pending: [] };
+    compiling.set(gl, state);
+  }
+  const shaders = [shader(gl, gl.VERTEX_SHADER, vertexSource), shader(gl, gl.FRAGMENT_SHADER, fragmentSource)];
   const program = gl.createProgram()!;
-  gl.attachShader(program, vs);
-  gl.attachShader(program, fs);
+  for (const s of shaders) gl.attachShader(program, s);
   gl.linkProgram(program);
-  gl.deleteShader(vs);
-  gl.deleteShader(fs);
-  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-    const log = gl.getProgramInfoLog(program);
-    gl.deleteProgram(program);
-    throw new Error(`pondscape: program failed to link\n${log}`);
-  }
+  const result: Program = { program, uniforms: {} };
+  state.pending.push({ program: result, shaders });
+  return result;
+}
 
-  const uniforms: Record<string, WebGLUniformLocation> = {};
-  const count = gl.getProgramParameter(program, gl.ACTIVE_UNIFORMS) as number;
-  for (let i = 0; i < count; i++) {
-    const info = gl.getActiveUniform(program, i)!;
-    uniforms[info.name] = gl.getUniformLocation(program, info.name)!;
+/**
+ * Whether every program made with createProgram has linked; their uniforms
+ * are filled in as they do. Call it once a frame. Browsers with
+ * KHR_parallel_shader_compile compile in the background, so this never
+ * waits; without it each call waits for one program. Throws if one failed.
+ */
+export function programsReady(gl: WebGL2RenderingContext) {
+  const state = compiling.get(gl);
+  if (!state) return true;
+  const { parallel, pending } = state;
+  while (pending.length) {
+    const { program: { program, uniforms }, shaders } = pending[0];
+    if (parallel && !gl.getProgramParameter(program, parallel.COMPLETION_STATUS_KHR)) return false;
+    pending.shift();
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      const failed = shaders.find((s) => !gl.getShaderParameter(s, gl.COMPILE_STATUS));
+      throw new Error(
+        failed
+          ? `pondscape: shader failed to compile\n${gl.getShaderInfoLog(failed)}`
+          : `pondscape: program failed to link\n${gl.getProgramInfoLog(program)}`,
+      );
+    }
+    for (const s of shaders) gl.deleteShader(s);
+    const count = gl.getProgramParameter(program, gl.ACTIVE_UNIFORMS) as number;
+    for (let i = 0; i < count; i++) {
+      const info = gl.getActiveUniform(program, i)!;
+      uniforms[info.name] = gl.getUniformLocation(program, info.name)!;
+    }
+    if (!parallel) return pending.length === 0;
   }
-  return { program, uniforms };
+  return true;
 }
 
 /** A texture you can render into. */

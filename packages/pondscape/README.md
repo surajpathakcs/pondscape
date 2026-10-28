@@ -52,7 +52,7 @@ export function Hero() {
 | Prop | |
 | --- | --- |
 | `options` | Any of the options below. Read once when the pond mounts; give it a new `key` to start over with new options. |
-| `onReady(pond)` | Called with the running pond, e.g. to make ripples yourself. May return a cleanup function. |
+| `onReady(pond)` | Called with the pond as soon as it's created, e.g. to make ripples yourself or pause it while it's off screen. May return a cleanup function. |
 | `fallback` | Shown instead of the pond on devices that can't run it. |
 | `className`, `style` | Passed to the canvas. |
 
@@ -129,6 +129,7 @@ createPond(canvas, {
 
 | | |
 | --- | --- |
+| `ready` | A promise that resolves when the first frame is drawn. The shaders compile in the background first, which can take a moment the first time a browser sees them; until then the canvas is hidden, so whatever is behind it shows. Rejects if they fail to compile. |
 | `ripple(x, y, { strength })` | Makes a ripple at a point, in CSS pixels from the canvas's top-left. `strength: 1` is a fingertip tap. |
 | `pause()`, `resume()` | Stop and restart the animation, e.g. while the pond is scrolled out of view. |
 | `fps` | Frames per second, averaged over the last second. |

@@ -2,7 +2,7 @@ import { Axolotls, type AxolotlSpec } from "./axolotl";
 import { Bed, scatterStones } from "./bed";
 import { School, type FishSpec, type Splash } from "./fish";
 import { Floating } from "./floating";
-import { enableFloatTargets, parseColor } from "./gl";
+import { enableFloatTargets, parseColor, programsReady } from "./gl";
 import { Grass, growGrass } from "./grass";
 import { Underwater } from "./underwater";
 import { Renderer, SUN, type Palette } from "./renderer";
@@ -65,6 +65,12 @@ export interface RippleOptions {
 
 export interface Pond {
   readonly canvas: HTMLCanvasElement;
+  /**
+   * Resolves when the pond draws its first frame. Its shaders compile in the
+   * background first, which can take a few seconds the first time a browser
+   * sees them. Rejects if they fail to compile.
+   */
+  readonly ready: Promise<void>;
   /** Makes a ripple at a point, in CSS pixels from the canvas's top-left. */
   ripple(x: number, y: number, options?: RippleOptions): void;
   pause(): void;
@@ -174,8 +180,10 @@ export function createPond(canvas: HTMLCanvasElement, options: PondOptions = {})
     sky: linear(colors.sky),
   };
 
-  const gl = canvas.getContext("webgl2", { antialias: false, alpha: false });
-  if (!gl) throw new Error("pondscape: WebGL2 isn't available in this browser");
+  const context = canvas.getContext("webgl2", { antialias: false, alpha: false });
+  if (!context) throw new Error("pondscape: WebGL2 isn't available in this browser");
+  // Named again after the check, so functions declared below see it as non-null.
+  const gl = context;
   if (!enableFloatTargets(gl)) {
     throw new Error("pondscape: this device can't render to float textures");
   }
@@ -192,6 +200,9 @@ export function createPond(canvas: HTMLCanvasElement, options: PondOptions = {})
   const ripples = new Ripples(gl);
   const school = new School(gl);
   const salamanders = new Axolotls(gl);
+  // Hand the shaders to the GPU to compile now. Otherwise nothing sends them
+  // until the first frame, since the hidden canvas isn't being shown.
+  gl.flush();
   let released = false;
   // The fish see the sun through the surface, bent toward straight down.
   const toSunUnderwater = refractedSun();
@@ -200,7 +211,24 @@ export function createPond(canvas: HTMLCanvasElement, options: PondOptions = {})
   /** Metres per world unit (one canvas height). */
   let metres = size;
 
+  // Nothing is laid out or drawn until the shaders have compiled; the first
+  // frame after that does the first resize. Until it's drawn the canvas is
+  // hidden, so the page behind shows instead of a black box.
+  let shadersReady = false;
+  let drawn = false;
+  const visibility = canvas.style.visibility;
+  canvas.style.visibility = "hidden";
+  let markReady!: () => void;
+  let markFailed!: (error: unknown) => void;
+  const ready = new Promise<void>((resolve, reject) => {
+    markReady = resolve;
+    markFailed = reject;
+  });
+  // A failure is also logged, so nobody has to listen for it.
+  ready.catch(() => {});
+
   function resize() {
+    if (!shadersReady) return;
     const rect = canvas.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return;
     cssWidth = rect.width;
@@ -250,9 +278,18 @@ export function createPond(canvas: HTMLCanvasElement, options: PondOptions = {})
     move: (x, y, d, dx, dy) => ripples.move(x, y, time, d, dx, dy),
   };
 
-  function ripple(x: number, y: number, { strength = 1 }: RippleOptions = {}) {
+  // Ripples asked for before the first frame (e.g. a welcome splash in
+  // onReady) wait until the pond has a size.
+  const early: [number, number, RippleOptions][] = [];
+
+  function ripple(x: number, y: number, options: RippleOptions = {}) {
+    if (!shadersReady) {
+      early.push([x, y, options]);
+      return;
+    }
+    if (cssHeight === 0) return;
     const p = toWorld(x, y);
-    ripples.tap(p.x, p.y, time, TAP_DEPTH * strength);
+    ripples.tap(p.x, p.y, time, TAP_DEPTH * (options.strength ?? 1));
   }
 
   // Dragging: the finger's dent travels along the pointer's path since the
@@ -300,6 +337,19 @@ export function createPond(canvas: HTMLCanvasElement, options: PondOptions = {})
       fpsFrames = 0;
       fpsSince = now;
     }
+    if (!shadersReady) {
+      try {
+        if (!programsReady(gl)) return;
+      } catch (error) {
+        console.warn(error);
+        pause();
+        markFailed(error);
+        return;
+      }
+      shadersReady = true;
+      resize();
+      for (const [x, y, options] of early.splice(0)) ripple(x, y, options);
+    }
     const layer = underwater.layer;
     const bedMap = bed.texture;
     const floorMap = bed.floor;
@@ -330,6 +380,11 @@ export function createPond(canvas: HTMLCanvasElement, options: PondOptions = {})
     school.draw(toSunUnderwater);
     underwater.end();
     renderer.draw(ripples, bedMap, floorMap, layer, floating, vao, time, { palette, depth, waves, metres });
+    if (!drawn) {
+      drawn = true;
+      canvas.style.visibility = visibility;
+      markReady();
+    }
   }
 
   function resume() {
@@ -351,6 +406,7 @@ export function createPond(canvas: HTMLCanvasElement, options: PondOptions = {})
   }
 
   function onPointerDown(e: PointerEvent) {
+    if (cssHeight === 0) return;
     const p = local(e);
     ripples.tap(p.x, p.y, time, TAP_DEPTH);
     floating.tap(p.x, p.y);
@@ -386,6 +442,7 @@ export function createPond(canvas: HTMLCanvasElement, options: PondOptions = {})
 
   return {
     canvas,
+    ready,
     ripple,
     get fps() {
       return fps;
@@ -395,6 +452,7 @@ export function createPond(canvas: HTMLCanvasElement, options: PondOptions = {})
     destroy() {
       pause();
       observer.disconnect();
+      canvas.style.visibility = visibility;
       canvas.removeEventListener("pointerdown", onPointerDown);
       canvas.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerup", onPointerUp);

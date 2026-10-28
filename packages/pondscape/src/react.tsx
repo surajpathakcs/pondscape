@@ -7,8 +7,10 @@ export interface PondProps {
   /** Read once when the pond mounts. Remount (change `key`) to apply new options. */
   options?: PondOptions;
   /**
-   * Called with the pond once it's running, e.g. to call `ripple()` yourself.
-   * May return a cleanup function, run before the pond is destroyed.
+   * Called with the pond as soon as it's created, e.g. to call `ripple()`
+   * yourself or pause it while it's off screen. It starts drawing once its
+   * shaders compile (`pond.ready`). May return a cleanup function, run before
+   * the pond is destroyed.
    */
   onReady?: (pond: PondInstance) => void | (() => void);
   /** Shown instead of the pond when the device can't run it. */
@@ -38,6 +40,8 @@ export function Pond({ options, onReady, fallback = null, className, style }: Po
       setFailed(true);
       return;
     }
+    // Shaders compile in the background, so they can also fail after this.
+    pond.ready.catch(() => setFailed(true));
     const cleanup = onReadyRef.current?.(pond);
     return () => {
       cleanup?.();

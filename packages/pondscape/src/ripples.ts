@@ -123,9 +123,9 @@ void main() {
 
 const SOURCE_VERT = /* glsl */ `#version 300 es
 precision highp float;
-in vec2 a_corner;
-in vec4 a_where;  // dent position x, y (world units); birth time; lifetime
-in vec4 a_what;   // dent depth (m); where it was filled, relative to the dent (m); layers
+layout(location = 0) in vec2 a_corner;
+layout(location = 1) in vec4 a_where;  // dent position x, y (world units); birth time; lifetime
+layout(location = 2) in vec4 a_what;   // dent depth (m); where it was filled, relative to the dent (m); layers
 
 uniform float u_time;
 uniform float u_aspect;
@@ -241,16 +241,15 @@ export class Ripples {
     const corners = gl.createBuffer()!;
     gl.bindBuffer(gl.ARRAY_BUFFER, corners);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
-    const cornerLocation = gl.getAttribLocation(this.sourceProgram.program, "a_corner");
-    gl.enableVertexAttribArray(cornerLocation);
-    gl.vertexAttribPointer(cornerLocation, 2, gl.FLOAT, false, 0, 0);
+    // Attribute locations are fixed in the shader, so this doesn't wait for it to compile.
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
 
     const instances = gl.createBuffer()!;
     gl.bindBuffer(gl.ARRAY_BUFFER, instances);
     gl.bufferData(gl.ARRAY_BUFFER, this.instanceData.byteLength, gl.DYNAMIC_DRAW);
     const stride = FLOATS_PER_SOURCE * 4;
-    for (const [name, offset] of [["a_where", 0], ["a_what", 16]] as const) {
-      const location = gl.getAttribLocation(this.sourceProgram.program, name);
+    for (const [location, offset] of [[1, 0], [2, 16]] as const) {
       gl.enableVertexAttribArray(location);
       gl.vertexAttribPointer(location, 4, gl.FLOAT, false, stride, offset);
       gl.vertexAttribDivisor(location, 1);
