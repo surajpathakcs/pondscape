@@ -24,8 +24,9 @@ import { BED, ETA, NOISE } from "./shaders/common";
  * 3. Compose: look through the surface at the floor and at anything in the
  *    water above it (the underwater layer: grass, fish), light them with the
  *    caustics and let what's in the water cast shadows on the floor, let the
- *    water absorb colour with depth (red first, which is why ponds look
- *    green), then add reflection and sun glints, lay the floating layer
+ *    water absorb colour with depth (with the default water colour, red goes
+ *    fastest and green slowest, so the pond looks green), then add
+ *    reflection and sun glints, lay the floating layer
  *    (lily pads and the like, see floating.ts) on top, and finish with
  *    grain and vignette.
  */
